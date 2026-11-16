@@ -1920,9 +1920,10 @@ void RenderDanielMenu() {
         return;
     }
 
+    ImGuiIO& io = ImGui::GetIO();
     ImVec2 winPos = ImGui::GetWindowPos();
     ImVec2 winSize = ImGui::GetWindowSize();
-    if (winPos.y > 550.0f || winPos.y < 0.0f) {
+    if (winPos.y < -300.0f || (io.DisplaySize.y > 200.0f && winPos.y > io.DisplaySize.y - 40.0f)) {
         ImGui::SetWindowPos(ImVec2(160, 60));
         winPos = ImVec2(160, 60);
     }
@@ -1931,6 +1932,33 @@ void RenderDanielMenu() {
     // ==========================================
     // 1. TOP HEADER BAR
     // ==========================================
+
+    // Dedicated Top Header Drag Zone for butter-smooth window dragging
+    ImGui::SetCursorScreenPos(ImVec2(winPos.x + 72.0f, winPos.y));
+    ImGui::InvisibleButton("##HeaderDragZone", ImVec2(winSize.x - 116.0f, 48.0f));
+    static bool s_MenuDragging = false;
+    static ImVec2 s_MenuDragOffset(0, 0);
+    if (ImGui::IsItemActivated()) {
+        s_MenuDragging = false;
+        s_MenuDragOffset = ImVec2(io.MousePos.x - winPos.x, io.MousePos.y - winPos.y);
+    }
+    if (ImGui::IsItemActive()) {
+        if (!s_MenuDragging && (fabsf(io.MousePos.x - (winPos.x + s_MenuDragOffset.x)) > 1.0f ||
+                                fabsf(io.MousePos.y - (winPos.y + s_MenuDragOffset.y)) > 1.0f ||
+                                ImGui::IsMouseDragging(0, 0.5f))) {
+            s_MenuDragging = true;
+        }
+        if (s_MenuDragging) {
+            ImVec2 targetPos(io.MousePos.x - s_MenuDragOffset.x, io.MousePos.y - s_MenuDragOffset.y);
+            if (targetPos.y < 0.0f) targetPos.y = 0.0f;
+            if (io.DisplaySize.y > 100.0f && targetPos.y > io.DisplaySize.y - 48.0f) targetPos.y = io.DisplaySize.y - 48.0f;
+            ImGui::SetWindowPos(targetPos);
+            winPos = targetPos;
+        }
+    }
+    if (ImGui::IsItemDeactivated()) {
+        s_MenuDragging = false;
+    }
 
     // 3 Mac Traffic Light Dots (Red, Yellow, Green)
     draw->AddCircleFilled(ImVec2(winPos.x + 24, winPos.y + 24), 6.0f, IM_COL32(255, 95, 86, 255));
@@ -1943,9 +1971,9 @@ void RenderDanielMenu() {
         g_bShowMenu = false;
     }
 
-    // HTDC MOD (Bold Italic stylized purple text)
+    // Iris Logo (Bold Italic stylized purple text, enlarged)
     if (g_FontLogo) ImGui::PushFont(g_FontLogo);
-    draw->AddText(ImVec2(winPos.x + 85, winPos.y + 13), IM_COL32(45, 28, 88, 255), "HTDC MOD");
+    draw->AddText(ImVec2(winPos.x + 82, winPos.y + 11), IM_COL32(45, 28, 88, 255), "Iris");
     if (g_FontLogo) ImGui::PopFont();
 
     // Close 'X' button on far top-right
@@ -2284,26 +2312,39 @@ void RenderFloatingToggleButton() {
         bool hovered = ImGui::IsItemHovered();
         bool active = ImGui::IsItemActive();
 
-        // Smooth dragging logic: allows moving button anywhere on screen
+        // Smooth 1:1 absolute cursor dragging: fluid & lag-free across any FPS
         static bool s_Dragging = false;
+        static ImVec2 s_DragOffset(0, 0);
         if (ImGui::IsItemActivated()) {
             s_Dragging = false;
+            s_DragOffset = ImVec2(io.MousePos.x - s_FloatingBtnPos.x, io.MousePos.y - s_FloatingBtnPos.y);
         }
-        if (active && ImGui::IsMouseDragging(0, 2.5f)) {
-            s_Dragging = true;
-            s_FloatingBtnPos.x += io.MouseDelta.x;
-            s_FloatingBtnPos.y += io.MouseDelta.y;
+        if (active) {
+            if (!s_Dragging && (fabsf(io.MousePos.x - (s_FloatingBtnPos.x + s_DragOffset.x)) > 1.5f ||
+                                fabsf(io.MousePos.y - (s_FloatingBtnPos.y + s_DragOffset.y)) > 1.5f ||
+                                ImGui::IsMouseDragging(0, 0.5f))) {
+                s_Dragging = true;
+            }
+            if (s_Dragging) {
+                s_FloatingBtnPos.x = io.MousePos.x - s_DragOffset.x;
+                s_FloatingBtnPos.y = io.MousePos.y - s_DragOffset.y;
 
-            // Clamp inside screen bounds
-            if (s_FloatingBtnPos.x < 0.0f) s_FloatingBtnPos.x = 0.0f;
-            if (s_FloatingBtnPos.y < 0.0f) s_FloatingBtnPos.y = 0.0f;
-            if (s_FloatingBtnPos.x > io.DisplaySize.x - btnDiameter - 8.0f) s_FloatingBtnPos.x = io.DisplaySize.x - btnDiameter - 8.0f;
-            if (s_FloatingBtnPos.y > io.DisplaySize.y - btnDiameter - 8.0f) s_FloatingBtnPos.y = io.DisplaySize.y - btnDiameter - 8.0f;
+                // Clamp inside screen bounds
+                float maxScreenX = (io.DisplaySize.x > 100.0f) ? (io.DisplaySize.x - btnDiameter - 8.0f) : 1920.0f;
+                float maxScreenY = (io.DisplaySize.y > 100.0f) ? (io.DisplaySize.y - btnDiameter - 8.0f) : 1080.0f;
+                if (s_FloatingBtnPos.x < 0.0f) s_FloatingBtnPos.x = 0.0f;
+                if (s_FloatingBtnPos.y < 0.0f) s_FloatingBtnPos.y = 0.0f;
+                if (s_FloatingBtnPos.x > maxScreenX) s_FloatingBtnPos.x = maxScreenX;
+                if (s_FloatingBtnPos.y > maxScreenY) s_FloatingBtnPos.y = maxScreenY;
+            }
         }
 
         // Click logic: only toggle if released without dragging
-        if (ImGui::IsItemDeactivated() && !s_Dragging && hovered) {
-            g_bShowMenu = !g_bShowMenu;
+        if (ImGui::IsItemDeactivated()) {
+            if (!s_Dragging && hovered) {
+                g_bShowMenu = !g_bShowMenu;
+            }
+            s_Dragging = false;
         }
 
         // Circular drop shadow / ambient glow

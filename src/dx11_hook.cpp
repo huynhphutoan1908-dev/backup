@@ -351,7 +351,7 @@ HRESULT WINAPI HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT
             g_FontBold = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 15.0f, &font_cfg, io.Fonts->GetGlyphRangesVietnamese());
             g_FontTitle = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuib.ttf", 26.0f, &font_cfg, io.Fonts->GetGlyphRangesVietnamese());
             g_FontSmall = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 12.0f, &font_cfg, io.Fonts->GetGlyphRangesVietnamese());
-            g_FontLogo = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuiz.ttf", 19.0f, &font_cfg, io.Fonts->GetGlyphRangesVietnamese());
+            g_FontLogo = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeuiz.ttf", 24.0f, &font_cfg, io.Fonts->GetGlyphRangesVietnamese());
 
             static const ImWchar icon_ranges[] = { 0xE700, 0xF8A0, 0 };
             g_FontIcons = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segmdl2.ttf", 15.0f, &font_cfg, icon_ranges);
