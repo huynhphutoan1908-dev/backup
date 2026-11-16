@@ -2158,7 +2158,7 @@ void RenderDanielMenu() {
 
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1.0f, 1.0f, 1.0f, 0.90f * g_MenuAlpha));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14.0f);
-        ImGui::BeginChild("##SettingsCard", ImVec2(contentW, 330.0f), true);
+        ImGui::BeginChild("##SettingsCard", ImVec2(contentW, 255.0f), true);
         {
             // Độ trong suốt Menu
             ImGui::SetCursorPos(ImVec2(18, 18));
@@ -2204,23 +2204,6 @@ void RenderDanielMenu() {
             // Thông tin tác giả
             ImGui::SetCursorPos(ImVec2(18, 218));
             ImGui::TextColored(ImVec4(0.40f, 0.35f, 0.50f, 1.0f), "Tác giả: Daniel");
-
-            // Live status của bộ tính năng Vinh HTDC Clean
-            ImGui::SetCursorPos(ImVec2(18, 246));
-            if (g_bMasterFeaturesLoaded) {
-                ImGui::TextColored(ImVec4(0.15f, 0.75f, 0.25f, 1.0f), "Tính năng Vinh (HTDC Clean): ĐÃ KÍCH HOẠT (10/10)");
-            } else {
-                ImGui::TextColored(ImVec4(0.85f, 0.35f, 0.20f, 1.0f), "Tính năng Vinh (HTDC Clean): CHƯA KÍCH HOẠT (Đang chờ nạp...)");
-            }
-
-            ImGui::SetCursorPos(ImVec2(18, 272));
-            if (ImGui::Button("NẠP LẠI TÍNH NĂNG VINH (HTDC CLEAN)##BtnReloadVinh", ImVec2(contentW - 36.0f, 34.0f))) {
-                _unlink("C:\\Users\\huynh\\Downloads\\htht by daniel\\master_loaded.txt");
-                FILE* fReload = fopen("C:\\Users\\huynh\\Downloads\\htht by daniel\\reload_lua.txt", "w");
-                if (fReload) { fputs("reload", fReload); fclose(fReload); }
-                g_bMasterFeaturesLoaded = false;
-                LogDaniel("User clicked [NẠP LẠI TÍNH NĂNG VINH] in Settings!");
-            }
         }
         ImGui::EndChild();
         ImGui::PopStyleVar();
