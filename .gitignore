@@ -1,0 +1,9 @@
+# Build outputs & temp files
+*.obj
+*.pdb
+*.log
+*.tmp
+version_old*.dll
+game_hwnd.txt
+take_shot.txt
+trigger_*.txt
