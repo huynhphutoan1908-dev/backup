@@ -20357,60 +20357,6 @@ do
             ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
         end
 
-        local function runPriorityTargetAndSS(isPostBuild)
-            local targetSid, targetRank, targetValid = getTargetFocusInfo()
-            ops.protectedTargetSetId = (targetValid and targetSid > 0) and targetSid or nil
-
-            -- Priority 0 (Focus Mode): Upgrade targetSid (#1 -> 10* -> #2 -> ...), prebuild & lock its exact next-step phôi,
-            -- fold pure-bag D..A/S-excess 0*..4* -> 5*, and if bag still < 25 free slots overflow to OTHER SS one-by-one toward 10*!
-            if targetValid and isRunningFn() then
-                runFocusTargetUpgrade(isPostBuild, targetSid, targetRank)
-                if not isRunningFn() or getFreeNow() >= focusFreeCap then return true end
-
-                if not isPostBuild then
-                    -- Step 1: Pure bag 0*..4* -> 5* compression for D..A + excess S ONLY (keeps 1 highest S; NEVER spams new SS 5* clones)
-                    ops.allowLibrary = false
-                    ops.allowFodderLibrary = false
-                    local foldSids = ops.getOrderedFodderSetIds(targetSid, true)
-                    local mFold = ops.batchFoldFodder(foldSids, focusFreeCap, 5, false, nil, nil, nil, 5)
-                    if (mFold or 0) > 0 then mergesDone = mergesDone + mFold end
-                    if not isRunningFn() or getFreeNow() >= focusFreeCap then return true end
-
-                    -- Step 2: Prebuild targetSid's needed 5*/6*/9* phôi & lock quota
-                    if ops.reservedFodderQuota and ops.prebuildTargetFodder then
-                        local preMerges = ops.prebuildTargetFodder(targetSid, ops.reservedFodderQuota)
-                        mergesDone = mergesDone + (preMerges or 0)
-                        ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
-                    end
-                    if not isRunningFn() or getFreeNow() >= 25 then return true end
-
-                    -- Step 3: Bag still crowded (< 25 free) -> overflow SS phụ one-by-one toward 10* strictly above reserved quota
-                    runOverflowSSOneByOne(focusFreeCap, targetSid)
-                    if not isRunningFn() or getFreeNow() >= 10 then return true end
-                else
-                    if ops.reservedFodderQuota and ops.prebuildTargetFodder
-                       and (((ops.reservedFodderQuota.star6 or 0) > 0) or ((ops.reservedFodderQuota.star9 or 0) > 0)) then
-                        local preMerges = ops.prebuildTargetFodder(targetSid, ops.reservedFodderQuota)
-                        mergesDone = mergesDone + (preMerges or 0)
-                        ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
-                    end
-                    if getFreeNow() < 25 then
-                        runOverflowSSOneByOne(focusFreeCap, targetSid)
-                    end
-                    if not isRunningFn() or getFreeNow() >= 10 then return true end
-                end
-                return false
-            end
-
-            -- Default All-SS mode (targetSid == 0): push every SS (1 shared copy per species) cleanly toward 10*, one by one
-            runOverflowSSOneByOne(nil, nil)
-            if not isRunningFn() or getFreeNow() >= 10 then
-                return true
-            end
-            return false
-        end
-
-
         local function compressFodderFiveToSixAndSixToNine(stopFreeTarget, allowFodLib, allowPartial9)
             local builtAny = false
             local prevL, prevFL = ops.allowLibrary, ops.allowFodderLibrary
@@ -20422,12 +20368,13 @@ do
                 local keep6Lim = math.max((ops.reservedFodderQuota and ops.reservedFodderQuota.star6) or 0, 2)
 
                 -- 1) Compress surplus 5* -> 6* (6x 5* -> 1x 6*) above reserved 5* quota
+                local failedSixBases = {}
                 while isRunningFn() and getFreeNow() < stopFreeTarget do
                     if ops.countSafeFodderPets(5, nil, nil, nil) < (keep5Lim + 6) then break end
                     local state5 = ops.buildFodderState(nil)
                     local pickedBase = nil
                     for _, sid in ipairs(cSids) do
-                        local lst = ops.findSafeFodderSamePets(sid, function(p) return (p.star or 0) == 5 end, nil, nil, nil, state5)
+                        local lst = ops.findSafeFodderSamePets(sid, function(p) return (p.star or 0) == 5 end, failedSixBases, nil, nil, state5)
                         if #lst > 0 and ops.canAffordStarStep(lst[1], 6) then
                             pickedBase = lst[1]
                             break
@@ -20441,7 +20388,7 @@ do
                         builtAny = true
                     else
                         recordStepFail(rsn6)
-                        break
+                        failedSixBases[pickedBase.petId] = true
                     end
                 end
 
@@ -20541,7 +20488,14 @@ do
             ops.allowLibrary = false
             ops.allowFodderLibrary = false
 
-            local m1, built1 = ops.batchFoldFodder(craftSids, targetCompactionFree, 5, false, nil, nil, nil, 5)
+            local same6Req = (starRules[6] and starRules[6].samePet) or 2
+            local fodStateInit = ops.buildFodderState(nil)
+            local resFn1 = function(sid)
+                local has5 = #ops.findSafeFodderSamePets(sid, function(p) return (p.star or 0) == 5 end, {}, nil, nil, fodStateInit) > 0
+                return has5 and same6Req or 0
+            end
+
+            local m1, built1 = ops.batchFoldFodder(craftSids, targetCompactionFree, 5, false, resFn1, nil, nil, 5)
             if (m1 or 0) > 0 then mergesDone = mergesDone + m1 end
             if m1 == 0 and inv:GetNumberItemConsumable(2) < (starRules[1] and starRules[1].numItem or 5000) then
                 hitCrysShort = true
@@ -20586,10 +20540,10 @@ do
                 runFocusTargetUpgrade(true, targetSid, targetRank)
                 ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
                 if isRunningFn() then
-                    runOverflowSSOneByOne(targetCompactionFree, targetSid)
+                    runOverflowSSOneByOne(nil, targetSid)
                 end
             else
-                runOverflowSSOneByOne(targetCompactionFree, nil)
+                runOverflowSSOneByOne(nil, nil)
             end
         end
 
@@ -21170,7 +21124,8 @@ do
                                     mergeMinSlots = 10
                                     mergeIsProactive = true
                                 else
-                                    batches = math.min(batches, math.max(1, math.floor(freeSlots / 4)))
+                                    local safeBatch = (freeSlots < proactiveLimit) and math.floor(freeSlots / 10) or math.floor(freeSlots / 4)
+                                    batches = math.min(batches, math.max(1, safeBatch))
                                 end
                             end
                             for _ = 1, batches do
