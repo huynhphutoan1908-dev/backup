@@ -20410,15 +20410,6 @@ do
             return false
         end
 
-        if runPriorityTargetAndSS(false) then
-            return finishMerge(nil)
-        end
-
-        local function recheckAfterFodderBuild()
-            runPriorityTargetAndSS(true)
-            ops.allowLibrary = false
-            ops.allowFodderLibrary = false
-        end
 
         local function compressFodderFiveToSixAndSixToNine(stopFreeTarget, allowFodLib, allowPartial9)
             local builtAny = false
@@ -20427,8 +20418,8 @@ do
             ops.allowFodderLibrary = allowFodLib and true or false
             local okCmp, errCmp = pcall(function()
                 local cSids = ops.getOrderedFodderSetIds(nil, true)
-                local keep5Lim = (ops.reservedFodderQuota and ops.reservedFodderQuota.star5) or 0
-                local keep6Lim = (ops.reservedFodderQuota and ops.reservedFodderQuota.star6) or 0
+                local keep5Lim = math.max((ops.reservedFodderQuota and ops.reservedFodderQuota.star5) or 0, 6)
+                local keep6Lim = math.max((ops.reservedFodderQuota and ops.reservedFodderQuota.star6) or 0, 2)
 
                 -- 1) Compress surplus 5* -> 6* (6x 5* -> 1x 6*) above reserved 5* quota
                 while isRunningFn() and getFreeNow() < stopFreeTarget do
@@ -20525,81 +20516,119 @@ do
             return builtAny
         end
 
-        -- 3. Priority 3: Deep 3-tier fodder consolidation (Keeping 1 highest copy per S species + Focus quota):
-        --    3A: 0*..4* -> 5* (D..A + excess S) + recycle >=22 bag 0*..4* of completed 10* SS if bag < 25 free
-        --    3B: surplus 5* -> 6* and surplus 6* -> 9* (bag-only first, then fodder Library D..A/excess S)
-        local freeNow = getFreeNow()
-        local desiredFree = math.max(10, phoiFree)
+        local targetSid, targetRank, targetValid = getTargetFocusInfo()
+        ops.protectedTargetSetId = (targetValid and targetSid > 0) and targetSid or nil
+
+        -- Initial compute of target fodder quota (if target set)
+        if targetValid and targetSid > 0 then
+            ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
+            -- Step 0: Initial Focus Pass for target pet using whatever is immediately available
+            runFocusTargetUpgrade(false, targetSid, targetRank)
+            ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
+        end
+
+        local _, _, initCap = getFreeNow()
+        -- Target free capacity for proactive compaction: keep warehouse around 35-45% free
+        local targetCompactionFree = math.min(initCap - 30, math.max(350, math.floor(initCap * 0.40)))
         local craftSids = ops.getOrderedFodderSetIds(nil, true)
-        if isRunningFn() and freeNow < desiredFree then
+
+        -- =========================================================================
+        -- TIER 1: Fast compress all D..A trash pets from 0*..4* into 5* fodder (~8:1 space reduction)
+        -- =========================================================================
+        if isRunningFn() and getFreeNow() < targetCompactionFree then
+            _G.HTPS_PET_SUMMON_STATUS = "nén phôi 5★"
+            _G.HTPS_UpdatePetSummonBtnUI()
             ops.allowLibrary = false
             ops.allowFodderLibrary = false
-            _G.HTPS_PET_SUMMON_STATUS = "ghép phôi"
-            _G.HTPS_UpdatePetSummonBtnUI()
 
-            local m5, built5 = ops.batchFoldFodder(craftSids, desiredFree, 5, false, nil, nil, nil, 5)
-            mergesDone = mergesDone + m5
-            if m5 == 0 and inv:GetNumberItemConsumable(2) < (starRules[1] and starRules[1].numItem or 5000) then
+            local m1, built1 = ops.batchFoldFodder(craftSids, targetCompactionFree, 5, false, nil, nil, nil, 5)
+            if (m1 or 0) > 0 then mergesDone = mergesDone + m1 end
+            if m1 == 0 and inv:GetNumberItemConsumable(2) < (starRules[1] and starRules[1].numItem or 5000) then
                 hitCrysShort = true
             end
-            local builtSSRec = false
-            if isRunningFn() and getFreeNow() < 25 then
-                local _, bC = recycleCompletedSSToFive(math.min(desiredFree, 40))
-                if bC then builtSSRec = true end
-            end
 
-            if (built5 or builtSSRec) and isRunningFn() then
-                recheckAfterFodderBuild()
-            end
-
-            if isRunningFn() and getFreeNow() < desiredFree then
-                _G.HTPS_PET_SUMMON_STATUS = "ghép phôi"
-                _G.HTPS_UpdatePetSummonBtnUI()
-                if compressFodderFiveToSixAndSixToNine(desiredFree, false, getFreeNow() < 15) and isRunningFn() then
-                    recheckAfterFodderBuild()
-                end
-                if isRunningFn() and getFreeNow() < desiredFree then
-                    if compressFodderFiveToSixAndSixToNine(desiredFree, true, getFreeNow() < 15) and isRunningFn() then
-                        recheckAfterFodderBuild()
-                    end
-                end
+            -- Recycle excess 0*..4* of completed-10* SS into 5* fodder if available
+            if isRunningFn() then
+                local mSS, bSS = recycleCompletedSSToFive(targetCompactionFree)
+                if (mSS or 0) > 0 then mergesDone = mergesDone + mSS end
             end
         end
 
-        -- 4. Deadlock-only (< 10 free slots needed for x10 summon): partial 4* folds (D..A + excess S) + completed-10* SS fold, then recheck
+        -- =========================================================================
+        -- TIER 2 & 3: Compress surplus 5* -> 6* fodder and surplus 6* -> 9* fodder
+        -- =========================================================================
+        if isRunningFn() and getFreeNow() < targetCompactionFree then
+            _G.HTPS_PET_SUMMON_STATUS = "nén phôi 6★-9★"
+            _G.HTPS_UpdatePetSummonBtnUI()
+            -- Pass 1: bag-only fodder
+            compressFodderFiveToSixAndSixToNine(targetCompactionFree, false, true)
+            -- Pass 2: with fodder library if needed
+            if isRunningFn() and getFreeNow() < targetCompactionFree then
+                compressFodderFiveToSixAndSixToNine(targetCompactionFree, true, true)
+            end
+        end
+
+        -- =========================================================================
+        -- TIER 4: Feed 9* and 6* fodder into SS pets (push toward 10*)
+        -- =========================================================================
+        if isRunningFn() then
+            _G.HTPS_PET_SUMMON_STATUS = "ghép SS 10★"
+            _G.HTPS_UpdatePetSummonBtnUI()
+            if targetValid and targetSid > 0 then
+                -- Prebuild any exact remaining fodder for target if needed
+                ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
+                if ops.reservedFodderQuota and ops.prebuildTargetFodder
+                   and (((ops.reservedFodderQuota.star6 or 0) > 0) or ((ops.reservedFodderQuota.star9 or 0) > 0)) then
+                    local preMerges = ops.prebuildTargetFodder(targetSid, ops.reservedFodderQuota)
+                    mergesDone = mergesDone + (preMerges or 0)
+                    ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
+                end
+                runFocusTargetUpgrade(true, targetSid, targetRank)
+                ops.reservedFodderQuota = ops.computeTargetFodderQuota(targetSid)
+                if isRunningFn() then
+                    runOverflowSSOneByOne(targetCompactionFree, targetSid)
+                end
+            else
+                runOverflowSSOneByOne(targetCompactionFree, nil)
+            end
+        end
+
+        -- =========================================================================
+        -- TIER 5: Final Clean-up Fold for any remaining loose 0*..4* trash
+        -- =========================================================================
+        if isRunningFn() and getFreeNow() < targetCompactionFree then
+            ops.allowLibrary = false
+            ops.allowFodderLibrary = false
+            local mClean = ops.batchFoldFodder(craftSids, targetCompactionFree, 5, false, nil, nil, nil, 5)
+            if (mClean or 0) > 0 then mergesDone = mergesDone + mClean end
+        end
+
+        -- =========================================================================
+        -- EMERGENCY FALLBACK (< 10 free slots)
+        -- =========================================================================
         if isRunningFn() and getFreeNow() < 10 then
             ops.allowLibrary = false
             ops.allowFodderLibrary = false
-            _G.HTPS_PET_SUMMON_STATUS = "ghép phôi"
+            _G.HTPS_PET_SUMMON_STATUS = "cứu cấp <10"
             _G.HTPS_UpdatePetSummonBtnUI()
             local same6Req = (starRules[6] and starRules[6].samePet) or 2
-            local m4Total = 0
             local fodState4 = ops.buildFodderState(nil)
-            for passIdx = 1, 2 do
-                if getFreeNow() >= 10 then break end
-                local resFn = (passIdx == 1) and function(sid)
-                    return (#ops.findSafeFodderSamePets(sid, function(p) return (p.star or 0) == 5 end, {}, nil, nil, fodState4) > 0) and same6Req or 0
-                end or nil
-                local m4 = ops.batchFoldFodder(craftSids, 15, 4, true, resFn, nil, nil, 5)
-                m4Total = m4Total + m4
-                mergesDone = mergesDone + m4
+            local resFn = function(sid)
+                return (#ops.findSafeFodderSamePets(sid, function(p) return (p.star or 0) == 5 end, {}, nil, nil, fodState4) > 0) and same6Req or 0
             end
+            local m4 = ops.batchFoldFodder(craftSids, 15, 4, true, resFn, nil, nil, 5)
+            mergesDone = mergesDone + m4
             if isRunningFn() and getFreeNow() < 10 then
                 local mc4 = recycleCompletedSSToFive(15)
-                if mc4 > 0 then m4Total = m4Total + mc4 end
+                mergesDone = mergesDone + mc4
             end
-            if m4Total > 0 and isRunningFn() and getFreeNow() < 10 then
-                recheckAfterFodderBuild()
-            end
-        end
-
-        -- 5. Last-resort emergency in Focus mode if bag STILL < 10 slots: release fodder quota (still keeping targetSid's own copies safe!)
-        local focusSidEnd, _, focusEnd = getTargetFocusInfo()
-        if focusEnd and isRunningFn() and getFreeNow() < 10 then
-            ops.reservedFodderQuota = nil
-            runOverflowSSOneByOne(focusFreeCap, focusSidEnd)
+            local focusSidEnd, _, focusEnd = getTargetFocusInfo()
             if isRunningFn() and getFreeNow() < 10 then
-                compressFodderFiveToSixAndSixToNine(15, true, true)
+                ops.reservedFodderQuota = nil
+                runOverflowSSOneByOne(targetCompactionFree, focusEnd and focusSidEnd or nil)
+                if isRunningFn() and getFreeNow() < 10 then
+                    compressFodderFiveToSixAndSixToNine(15, true, true)
+                end
             end
         end
 
@@ -21045,7 +21074,7 @@ do
                 local estOwned = (pdi.petOwnedList and pdi.petOwnedList.listElement and #pdi.petOwnedList.listElement) or 0
                 local estExact = false
 
-                local function runAutoMergeCycle(minNeedSlots, alreadySynced, triggerErrMsg)
+                local function runAutoMergeCycle(minNeedSlots, alreadySynced, triggerErrMsg, isProactive)
                     if not alreadySynced or not estExact then
                         _G.HTPS_PetSync940(false, true)
                     end
@@ -21069,7 +21098,7 @@ do
                     ops.setKnownBagCap(knownBagCap)
 
                     local realFreeBefore = math.max(0, knownBagCap - curOwned)
-                    if not triggerErrMsg and realFreeBefore >= minNeedSlots then
+                    if not triggerErrMsg and not isProactive and realFreeBefore >= minNeedSlots then
                         ops.yieldIfDue(false)
                         return true
                     end
@@ -21089,7 +21118,8 @@ do
                     estOwned = afterOwned
                     estExact = true
                     local freeAfter = math.max(0, knownBagCap - afterOwned)
-                    if freeAfter >= minNeedSlots and (not triggerErrMsg or mergesDone > 0 or afterOwned < curOwned) then
+                    local passMin = isProactive and 10 or minNeedSlots
+                    if freeAfter >= passMin and (not triggerErrMsg or mergesDone > 0 or afterOwned < curOwned) then
                         ops.yieldIfDue(false)
                         return true
                     end
@@ -21098,6 +21128,7 @@ do
                     return false
                 end
 
+                local lastProactiveCheckOwned = -1
                 while _G.HTPS_PET_SUMMON_RUNNING do
                     local psNow = _G.HTPS_GetLivePetSummon()
                     if not psNow then break end
@@ -21108,6 +21139,7 @@ do
                     local sentFree = false
                     local needMergeNow = false
                     local mergeMinSlots = 10
+                    local mergeIsProactive = false
                     local cdLeft = 999
                     pcall(function()
                         if pdi and pdi.countdownText then
@@ -21126,12 +21158,19 @@ do
                             local batches = math.min(maxBatch, math.floor(compass / 10))
                             if knownBagCap then
                                 local freeSlots = math.max(0, knownBagCap - estOwned)
-                                if freeSlots >= 10 then
-                                    batches = math.min(batches, math.max(1, math.floor(freeSlots / 4)))
-                                else
+                                local proactiveLimit = math.min(200, math.max(150, math.floor(knownBagCap * 0.18)))
+                                if freeSlots < 10 then
                                     batches = 0
                                     needMergeNow = true
                                     mergeMinSlots = 10
+                                    mergeIsProactive = false
+                                elseif freeSlots < proactiveLimit and (lastProactiveCheckOwned < 0 or estOwned >= lastProactiveCheckOwned + 15) then
+                                    batches = 0
+                                    needMergeNow = true
+                                    mergeMinSlots = 10
+                                    mergeIsProactive = true
+                                else
+                                    batches = math.min(batches, math.max(1, math.floor(freeSlots / 4)))
                                 end
                             end
                             for _ = 1, batches do
@@ -21158,7 +21197,13 @@ do
                     end
 
                     if needMergeNow then
-                        if not runAutoMergeCycle(mergeMinSlots, false, nil) then break end
+                        local prevOwned = estOwned
+                        if not runAutoMergeCycle(mergeMinSlots, false, nil, mergeIsProactive) then break end
+                        if mergeIsProactive and estOwned >= prevOwned then
+                            lastProactiveCheckOwned = estOwned
+                        else
+                            lastProactiveCheckOwned = -1
+                        end
                     else
                         -- Skip expensive processKEvent(940) (~170ms) during pure summoning when bag headroom > 35:
                         -- track estOwned directly from tp==2 drops in 0.5ms and only sync 940 near cap or every 8th packet.
@@ -21225,7 +21270,7 @@ do
                                 for _, sp in ipairs(specs) do
                                     if sp.vals and sp.vals[1] == 10 then sentTen = true break end
                                 end
-                                if not runAutoMergeCycle(sentTen and 10 or 1, gotInlineSync, errMsg) then break end
+                                if not runAutoMergeCycle(sentTen and 10 or 1, gotInlineSync, errMsg, false) then break end
                             else
                                 stopToast = errMsg
                                 break
